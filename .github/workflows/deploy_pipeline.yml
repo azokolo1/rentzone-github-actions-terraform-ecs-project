@@ -41,54 +41,7 @@ jobs:
         working-directory: ./iac
         run: terraform init
 
-      # Step to prepare Terraform for proper destroy sequence if TERRAFORM_ACTION is destroy
-      - name: Prepare for resource destruction
-        if: env.TERRAFORM_ACTION == 'destroy'
-        working-directory: ./iac
-        run: |
-          # Create a temporary file to ensure proper destroy order
-          cat > dependency_override.tf <<EOF
-          # Force dependency order for clean destruction
-          # ECS Service depends on ECS Cluster
-          resource "aws_ecs_service" "this" {
-            depends_on = [aws_ecs_cluster.this]
-          }
-          
-          # Subnets depend on instances, ENIs, and NAT gateways
-          resource "aws_subnet" "this" {
-            depends_on = [aws_instance.this, aws_network_interface.this, aws_nat_gateway.this]
-          }
-          
-          # Security groups depend on all resources that use them
-          resource "aws_security_group" "this" {
-            depends_on = [aws_instance.this, aws_lb.this, aws_ecs_service.this]
-          }
-          
-          # Force ECS tasks to be destroyed before ECS services
-          resource "aws_ecs_task_definition" "this" {
-            depends_on = [aws_ecs_service.this]
-          }
-          EOF
-          
-          # Create a destroy order shell script
-          cat > destroy_order.sh <<EOF
-          #!/bin/bash
-          # First target services that might use the security groups and subnets
-          terraform destroy -auto-approve -target="aws_ecs_service.this" || true
-          terraform destroy -auto-approve -target="aws_instance.this" || true
-          terraform destroy -auto-approve -target="aws_lb.this" || true
-          terraform destroy -auto-approve -target="aws_nat_gateway.this" || true
-          terraform destroy -auto-approve -target="aws_network_interface.this" || true
-          # Now target the security groups and subnets
-          terraform destroy -auto-approve -target="aws_security_group.this" || true
-          terraform destroy -auto-approve -target="aws_subnet.this" || true
-          # Complete the destruction process
-          terraform destroy -auto-approve
-          EOF
-          
-          chmod +x destroy_order.sh
-
-      # Run targeted destroy for problematic resources
+ # Run targeted destroy for problematic resources
       - name: Run Terraform targeted destroy for dependent resources
         if: env.TERRAFORM_ACTION == 'destroy'
         working-directory: ./iac
