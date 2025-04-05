@@ -8,7 +8,7 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_REGION: eu-west-2
-  TERRAFORM_ACTION: destroy
+  TERRAFORM_ACTION: apply
 
 jobs:
   # Configure AWS credentials 
@@ -22,7 +22,6 @@ jobs:
           aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
 
   # Build AWS infrastructure
   deploy_aws_infrastructure:
@@ -42,9 +41,85 @@ jobs:
         working-directory: ./iac
         run: terraform init
 
-      - name: Run Terraform apply/destroy
+      # Step to prepare Terraform for proper destroy sequence if TERRAFORM_ACTION is destroy
+      - name: Prepare for resource destruction
+        if: env.TERRAFORM_ACTION == 'destroy'
         working-directory: ./iac
-        run: terraform ${{ env.TERRAFORM_ACTION }} -auto-approve
+        run: |
+          # Create a temporary file to ensure proper destroy order
+          cat > dependency_override.tf <<EOF
+          # Force dependency order for clean destruction
+          # ECS Service depends on ECS Cluster
+          resource "aws_ecs_service" "this" {
+            depends_on = [aws_ecs_cluster.this]
+          }
+          
+          # Subnets depend on instances, ENIs, and NAT gateways
+          resource "aws_subnet" "this" {
+            depends_on = [aws_instance.this, aws_network_interface.this, aws_nat_gateway.this]
+          }
+          
+          # Security groups depend on all resources that use them
+          resource "aws_security_group" "this" {
+            depends_on = [aws_instance.this, aws_lb.this, aws_ecs_service.this]
+          }
+          
+          # Force ECS tasks to be destroyed before ECS services
+          resource "aws_ecs_task_definition" "this" {
+            depends_on = [aws_ecs_service.this]
+          }
+          EOF
+          
+          # Create a destroy order shell script
+          cat > destroy_order.sh <<EOF
+          #!/bin/bash
+          # First target services that might use the security groups and subnets
+          terraform destroy -auto-approve -target="aws_ecs_service.this" || true
+          terraform destroy -auto-approve -target="aws_instance.this" || true
+          terraform destroy -auto-approve -target="aws_lb.this" || true
+          terraform destroy -auto-approve -target="aws_nat_gateway.this" || true
+          terraform destroy -auto-approve -target="aws_network_interface.this" || true
+          # Now target the security groups and subnets
+          terraform destroy -auto-approve -target="aws_security_group.this" || true
+          terraform destroy -auto-approve -target="aws_subnet.this" || true
+          # Complete the destruction process
+          terraform destroy -auto-approve
+          EOF
+          
+          chmod +x destroy_order.sh
+
+      # Run targeted destroy for problematic resources
+      - name: Run Terraform targeted destroy for dependent resources
+        if: env.TERRAFORM_ACTION == 'destroy'
+        working-directory: ./iac
+        run: |
+          # Run targeted destroy for ECS service first
+          terraform destroy -auto-approve -target="module.ecs.aws_ecs_service.service" || true
+          
+          # Look for network interfaces in the problematic subnet and delete them
+          SUBNET_ID="subnet-0493844a209b6d5b1"
+          ENI_IDS=$(aws ec2 describe-network-interfaces --filters "Name=subnet-id,Values=${SUBNET_ID}" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text)
+          for ENI_ID in $ENI_IDS; do
+            echo "Deleting network interface $ENI_ID"
+            aws ec2 delete-network-interface --network-interface-id $ENI_ID || true
+          done
+          
+          # Look for resources using the problematic security group and detach them
+          SG_ID="sg-01f14787d85d6f091"
+          RESOURCES=$(aws ec2 describe-network-interfaces --filters "Name=group-id,Values=${SG_ID}" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text)
+          for RESOURCE_ID in $RESOURCES; do
+            echo "Processing resource $RESOURCE_ID that uses security group $SG_ID"
+            aws ec2 modify-network-interface-attribute --network-interface-id $RESOURCE_ID --groups "sg-default" || true
+          done
+          
+          # Now run the full destroy
+          terraform destroy -auto-approve
+
+      # Standard apply if not destroy
+      - name: Run Terraform apply
+        if: env.TERRAFORM_ACTION != 'destroy'
+        working-directory: ./iac
+        run: terraform apply -auto-approve
 
       - name: Get Terraform output image name
         if: env.TERRAFORM_ACTION == 'apply'
@@ -207,4 +282,3 @@ jobs:
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-
