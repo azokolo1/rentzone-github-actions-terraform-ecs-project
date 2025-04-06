@@ -239,7 +239,7 @@ jobs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
 
-   # Build and push Docker image to ECR
+    # Build and push Docker image to ECR
   build_and_push_image:
     name: Build and push Docker image to ECR
     needs:
@@ -254,9 +254,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: true
+        uses: aws-actions/amazon-ecr-login@v1
 
       - name: Build Docker image
         env:
@@ -277,20 +275,15 @@ jobs:
           --build-arg RDS_DB_USERNAME=${{ secrets.RDS_DB_USERNAME }} \
           --build-arg RDS_DB_PASSWORD=${{ secrets.RDS_DB_PASSWORD }} \
           -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
-          - name: Retag Docker image
-          env:
-            IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
-            IMAGE_TAG: ${{ needs.deploy_aws_infrastructure.outputs.image_tag }}
-          - name: Debug Docker Tag Info
-            run: |
-              echo "Image Name: ${{ env.IMAGE_NAME }}"
-              echo "Image Tag: ${{ env.IMAGE_TAG }}"
-              echo "ECR Registry: ${{ secrets.ECR_REGISTRY }}"
 
-                    run: |
-                      docker tag $IMAGE_NAME:$IMAGE_TAG ${{ secrets.ECR_REGISTRY }}/$IMAGE_NAME:$IMAGE_TAG   
-                - name: Push Docker Image to Amazon ECR
-                  env:
-                    IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
-                  run: |
-                    docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: Retag Docker image
+        env:
+          IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
+        run: |
+          docker tag ${{ env.IMAGE_NAME }} ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Push Docker Image to Amazon ECR
+        env:
+          IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
+        run: |
+          docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}
