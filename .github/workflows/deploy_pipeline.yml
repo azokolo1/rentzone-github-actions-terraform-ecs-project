@@ -281,10 +281,16 @@ jobs:
           env:
             IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
             IMAGE_TAG: ${{ needs.deploy_aws_infrastructure.outputs.image_tag }}
-          run: |
-            docker tag $IMAGE_NAME:$IMAGE_TAG ${{ secrets.ECR_REGISTRY }}/$IMAGE_NAME:$IMAGE_TAG   
-      - name: Push Docker Image to Amazon ECR
-        env:
-          IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
-        run: |
-          docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}
+          - name: Debug Docker Tag Info
+            run: |
+              echo "Image Name: ${{ env.IMAGE_NAME }}"
+              echo "Image Tag: ${{ env.IMAGE_TAG }}"
+              echo "ECR Registry: ${{ secrets.ECR_REGISTRY }}"
+
+                    run: |
+                      docker tag $IMAGE_NAME:$IMAGE_TAG ${{ secrets.ECR_REGISTRY }}/$IMAGE_NAME:$IMAGE_TAG   
+                - name: Push Docker Image to Amazon ECR
+                  env:
+                    IMAGE_NAME: ${{ needs.deploy_aws_infrastructure.outputs.image_name }}
+                  run: |
+                    docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}
